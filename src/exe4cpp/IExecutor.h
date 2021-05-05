@@ -37,6 +37,48 @@ namespace exe4cpp
 {
 
 /**
+* Provides thread-safe access to a value that can be set once.
+*/
+template <class T>
+class Synchronized
+{
+public:
+
+    Synchronized() : value(), isSet(false)
+    {}
+
+    T WaitForValue()
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        while (!isSet)
+        {
+            auto complete = [this]()
+            {
+                return isSet;
+            };
+            condition.wait(lock, complete);
+        }
+        return value;
+    }
+
+    void SetValue(T value_)
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        this->value = value_;
+        isSet = true;
+        condition.notify_all();
+    }
+
+private:
+
+    T value;
+    bool isSet;
+
+    std::mutex mutex;
+    std::condition_variable condition;
+};
+
+/**
  * Interface that abstracts an event loop.
  *
  * Events can be posted for to execute immediately or some time in the future.  Events
@@ -67,19 +109,29 @@ public:
         if (is_running_in_this_thread())
         {
             return action();
+        } else {
+            Synchronized<T> sync;
+            auto pointer = &sync;
+            auto lambda = [action, pointer]()
+            {
+                  T tmp = action();
+                  pointer->SetValue(tmp);
+            };
+            strand.post(lambda);
+            return sync.WaitForValue();
         }
 
-        std::promise<T> ready;
+        // std::promise<T> ready;
 
-        auto future = ready.get_future();
+        // auto future = ready.get_future();
 
-        auto run = [&] { ready.set_value(action()); };
+        // auto run = [&] { ready.set_value(action()); };
 
-        post(run);
+        // post(run);
 
-        future.wait();
+        // future.wait();
 
-        return future.get();
+        // return future.get();
     }
 
     void block_until(const std::function<void()>& action)
@@ -88,20 +140,30 @@ public:
         {
             action();
             return;
+        } else {
+            Synchronized<bool> sync;
+            auto pointer = &sync;
+            auto lambda = [action, pointer]()
+            {
+                  action();
+                  pointer->SetValue(true);
+            };
+            strand.post(lambda);
+            sync.WaitForValue();
         }
 
-        std::promise<bool> ready;
+        // std::promise<bool> ready;
 
-        auto future = ready.get_future();
+        // auto future = ready.get_future();
 
-        auto run = [&] {
-            action();
-            ready.set_value(true);
-        };
+        // auto run = [&] {
+        //     action();
+        //     ready.set_value(true);
+        // };
 
-        post(run);
+        // post(run);
 
-        future.wait();
+        // future.wait();
     }
 
     void block_until_and_flush(const std::function<void()>& action)
